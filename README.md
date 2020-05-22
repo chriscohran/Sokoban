@@ -1,4 +1,5 @@
-# Live Preview [https://chriscohran.com/projects/sokoban](https://chriscohran.com/projects/sokoban)
+# Live Preview
+[https://chriscohran.com/projects/sokoban](https://chriscohran.com/projects/sokoban)
 
 # About
 This was my first attempt at making a game with JavaScript. I learned a lot during the process, but this also led to some messy code. Now that I have an understanding of the process of creating a game with JS, I plan to do a complete rewrite to make the code more readable and modular.

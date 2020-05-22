@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width, height=device-height">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Sokoban</title>
+
+    <link rel="stylesheet" href="css/style.css" type="text/css">
+</head>
+<body>
+    <section id="container">
+        <div id="game-info">
+            <div id="moves"></div>
+            <div id="fps"></div>
+            <div class="clear-fix"></div>
+        </div>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </section>
+
+    <section id="controls">
+        <div><button onclick="movePlayer('up')">Up</button></div>
+        <div><button onclick="movePlayer('left')">Left</button><button onclick="movePlayer('right')" style="margin-left: 75px;">Right</button></div>
+        <div><button onclick="movePlayer('down')">Down</button></div>
+    </section>
+
+    <script type="module">
+        import { levels } from './js/levels.js';
+
+        let canvas;
+        let ctx;
+        let player;
+        let speed = 32;
+        let gridSize = 32;
+        let times = [];
+        let fps = 0;
+        let objects = [];
+        let gameLoop;
+        let paused = false;
+        let moves = 0;
+        let pushes = 0;
+        let currentLevel = 0;
+        let currentLevelCode = levels[currentLevel].level;
+        let totalLevels = levels.length;
+        let levelArray = currentLevelCode.trim().split("\n");
+        let undoArray = [];
+        let pushing = false;
+        let timerLoop;
+        let levelTimeStart;
+        let timerPauseOffset = 0;
+        let timer = '00:00';
+
+        let sprites = new Image();
+        sprites.src = "imgs/sheet2.png";
+        
+        // Set Variables for sprite positioning on sprite sheet
+        const sWall = {
+            startX: 0,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+        
+        const sCrate = {
+            startX: gridSize,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+
+        const sCrateGoal = {
+            startX: gridSize * 2,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        }
+
+        const sCrateDeadlock = {
+            startX: gridSize * 3,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        }
+        
+        const sPlayer = {
+            x: 0,
+            y: 0,
+            startX: gridSize * 4,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+        
+        const sGoal = {
+            startX: gridSize * 5,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+        
+        const sEmpty = {
+            startX: gridSize * 6,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+        
+        const sFloor = {
+            startX: gridSize * 7,
+            startY: 0,
+            width: gridSize,
+            height: gridSize
+        };
+
+        // Our actor class that all objects will be based on
+        class Actor {
+            constructor(sprite, tag, zIndex, width, height, x, y) {
+                this.startX = sprite[1];
+                this.startY = sprite[2];
+                this.sprite = () => {
+                    //ctx.fillRect(this.x, this.y, this.width, this.height);
+                    ctx.drawImage(sprite[0], this.startX, this.startY, sprite[3], sprite[4], this.x, this.y, sprite[7], sprite[8]);
+                };
+                this.tag = tag;
+                this.zIndex = zIndex;
+                this.width = width;
+                this.height = height;
+                this.x = sprite[5];
+                this.y = sprite[6];
+                this.onGoal = sprite[9];
+
+            }
+        }
+
+        const init = () => {
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            // Set the canvas width based on array length, multiply by grid size based on sprite height/width
+            currentLevelCode = levels[currentLevel].level;
+            levelArray = currentLevelCode.trim().split("\n");
+            canvas.width = levelArray[0].length * gridSize;
+            canvas.height = levelArray.length * gridSize;
+            document.getElementById('container').style.width = canvas.width;
+            document.getElementById('container').style.height = canvas.height;
+            createLevel();
+            // Sort game objects by their zIndex for rendering
+            let sort = objects.sort((a, b) => {
+                return a.zIndex - b.zIndex
+            });
+            objects = sort;
+            if (/Mobi|Android/i.test(navigator.userAgent)) {
+                ctx.scale(.60,.60);
+            }
+            levelTimeStart = new Date().getTime();
+            timerLoop = setInterval(increaseTime, 1000);
+            return gameLoop = setInterval(draw, 15);
+        }
+
+        const draw = () => {
+            calcFPS();
+            clear();
+            //grid();
+            ctx.fillStyle = '#989AA7';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#2098d1';
+            for (let i = 0; i < objects.length; i++) {
+                // Loop tough all objects and execute their sprite function to draw their sprite
+                objects[i].sprite();
+            }
+            player.sprite();
+            document.getElementById('moves').innerHTML = `L: ${currentLevel + 1} | M: ${moves} | P: ${pushes}`;
+            document.getElementById('fps').innerHTML = `Time: ${timer} | FPS: ${fps}`;
+        }
+
+        const clear = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        const grid = () => {
+            for(let i = 0; i < canvas.width; i += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i, canvas.height);
+                ctx.stroke();
+            }
+
+            for(let i = 0; i < canvas.height; i += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, i);
+                ctx.lineTo(canvas.width, i);
+                ctx.stroke();
+            }
+        }
+
+        function createLevel() {
+            // Loops for our level array. It first loops each index while reading each line characer-by-charactter
+            for(let y = 0; y < levelArray.length; y++) {
+                for (let x = 0; x < levelArray[y].length; x++) {
+                    // Push all the values we will need into the objects array
+                    levelArray[y] = levelArray[y].replace(/\s+/g, '');
+                    if (levelArray[y].charAt(x) === '#') {
+                        objects.push(new Actor([sprites, sWall.startX, sWall.startY, sWall.width, sWall.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'block', 1, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                    }
+                    
+                    if (levelArray[y].charAt(x) === 'O') {
+                        objects.push(new Actor([sprites, sGoal.startX, sGoal.startY, sGoal.width, sGoal.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'goal', 1, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                    }
+                    
+                    if (levelArray[y].charAt(x) === '_') {
+                        objects.push(new Actor([sprites, sEmpty.startX, sEmpty.startY, sEmpty.width, sEmpty.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'empty', -1, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                    }
+
+                    if (levelArray[y].charAt(x) === '@') {
+                        player = new Actor([sprites, sPlayer.startX, sPlayer.startY, sPlayer.width, sPlayer.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'player', 10, (x * gridSize), (y * gridSize), gridSize, gridSize);
+                        
+                    }
+
+                    if (levelArray[y].charAt(x) === 'X') {
+                        objects.push(new Actor([sprites, sCrate.startX, sCrate.startY, sCrate.width, sCrate.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'crate', 2, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                    }
+
+                    if (levelArray[y].charAt(x) === '*') {
+                        objects.push(new Actor([sprites, sCrateGoal.startX, sCrateGoal.startY, sCrateGoal.width, sCrateGoal.height, (x * gridSize), (y * gridSize), gridSize, gridSize, true], 'crate', 2, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                        objects.push(new Actor([sprites, sGoal.startX, sGoal.startY, sGoal.width, sGoal.height, (x * gridSize), (y * gridSize), gridSize, gridSize, false], 'goal', 1, (x * gridSize), (y * gridSize), gridSize, gridSize));
+                    }
+                }
+            }
+        }
+
+        const checkForWin = () => {
+            let totalToWin = 0;
+            let crates = objects.filter(obj => {
+                return obj.tag === 'crate'
+            });
+
+            let goals = objects.filter(obj => {
+                return obj.tag === 'goal'
+            });
+
+            totalToWin = goals.length;
+
+            // Reset all sprites
+            for (let i = 0; i < crates.length; i++) {
+                crates[i].onGoal = false;
+                crates[i].startX = sCrate.startX;
+            }
+
+            for (let i = 0; i < goals.length; i++) {
+                for (let z = 0; z < crates.length; z++) {
+                    if (totalToWin > 0) {
+                        if (goals[i].x === crates[z].x && goals[i].y === crates[z].y && crates[z].onGoal === false) {
+                            crates[z].onGoal = true;
+                            crates[z].startX = sCrateGoal.startX;
+                            totalToWin--;
+                        }
+                    } else {
+                        i = goals.length;
+                        z = crates.length;
+                    }
+                }
+            }
+
+            if (totalToWin === 0) {
+                if (currentLevel < levels.length - 1) {
+                    currentLevel++;
+                    clearInterval(gameLoop);
+                    draw();
+                    setTimeout(resetVariables, 1000);
+                } else {
+                    console.log('You did it!');
+                    clearInterval(gameLoop);
+                }
+            }
+        }
+
+        const resetVariables = () => {
+            player = null;
+            times = [];
+            fps = 0;
+            objects = [];
+            moves = 0;
+            undoArray = [];
+            pushing = false;
+            pushes = 0;
+            timer = '00:00';
+            clearInterval(timerLoop);
+            init();
+        }
+
+        const restartLevel = () => {
+            objects = [];
+            moves = 0;
+            pushes = 0;
+            timer = '00:00';
+            clearInterval(timerLoop);
+            clearInterval(gameLoop);
+            init();
+        }
+
+        const increaseTime = () => {
+            if (paused) {
+                timerPauseOffset += 1000;
+            }
+
+            let timeNow = new Date().getTime();
+            let distance = (timeNow - timerPauseOffset) - levelTimeStart;
+
+            const addZero = (i) => {
+                if (i < 10) {
+                    i = `0${i}`;
+                }
+                return i;
+            }
+            
+            if (distance > 3599999) {
+                timer = `${addZero(Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)))}:${addZero(Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60)))}:${addZero(Math.floor((distance % (1000 * 60)) / 1000))}`;
+            } else {
+                timer = `${addZero(Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60)))}:${addZero(Math.floor((distance % (1000 * 60)) / 1000))}`;
+            }
+        }
+
+        window.movePlayer = (e) => {
+            let x = player.x;
+            let y = player.y;
+
+            switch(e) {
+                case 'left':
+                    if (player.y > 0 && !place_meeting('block', x - gridSize, y)) {
+                        if (!crateCheck('left', x - gridSize, y)) {
+                            undoAdd();
+                            player.x = player.x - speed;
+                            moves++;
+                        }
+                    }
+                    break;
+                case 'right':
+                    // Make sure the player is moving within level and not blocked by a wall
+                    if (player.x + speed < canvas.width && !place_meeting('block', x + gridSize, y)) {
+                        // Make sure they're not blocked by two crates
+                        if (!crateCheck('right', x + gridSize, y)) {
+                            undoAdd();
+                            player.x = player.x + speed;
+                            moves++;
+                        }
+                    }
+                    break;
+                case 'up':
+                    if (player.y > 0 && !place_meeting('block', x, y - gridSize)) {
+                        if (!crateCheck('up', x, y - gridSize)) {
+                            undoAdd();
+                            player.y = player.y - speed;
+                            moves++;
+                        }
+                    }
+                    break;
+                case 'down':
+                    if (player.y + speed < canvas.height && !place_meeting('block', x, y + gridSize)) {
+                        if (!crateCheck('down', x, y + gridSize)) {
+                            undoAdd();
+                            player.y = player.y + speed;
+                            moves++;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (paused === false) {
+                let crateBlocked = false;
+                let crate;
+                // Right
+                if (e.keyCode === 39 || e.keyCode === 68) {
+                    movePlayer('right');
+                }
+
+                // Left
+                if (e.keyCode === 37 || e.keyCode === 65) {
+                    movePlayer('left');
+                }
+
+                // Up
+                if (e.keyCode === 38 || e.keyCode === 87) {
+                    movePlayer('up');
+                }
+
+                // Down
+                if (e.keyCode === 40 || e.keyCode === 83) {
+                    movePlayer('down');
+                }
+
+                // Undo (z)
+                if (e.keyCode === 90) {
+                    if (undoArray.length) {
+                        if ('crate' in undoArray[undoArray.length-1]) {
+                            let crate = undoArray[undoArray.length-1].crate.id;
+                            player.x = undoArray[undoArray.length-1].player.x;
+                            player.y = undoArray[undoArray.length-1].player.y;
+                            crate.x = undoArray[undoArray.length-1].crate.x;
+                            crate.y = undoArray[undoArray.length-1].crate.y;
+                            // Change sprite if undo takes crate off goal
+                            let goals = objects.filter(obj => {
+                                return obj.tag === 'goal'
+                            });
+                            let crateOnGoal = false;
+                            for (let i = 0; i < goals.length; i++) {
+                                if (crate.x === goals[i].x && crate.y === goals[i].y) {
+                                    crateOnGoal = true;
+                                }
+                            }
+                            if (!crateOnGoal) {
+                                crate.onGoal = false;
+                                crate.startX = sCrate.startX;
+                            }
+                            if (pushes > 0) {
+                                pushes--;
+                            }
+                        } else {
+                            player.x = undoArray[undoArray.length-1].player.x;
+                            player.y = undoArray[undoArray.length-1].player.y;
+                        }
+                        undoArray.pop();
+                    }
+                    if (moves > 0) {
+                        moves--;
+                    }
+                }
+
+                crateBlocked = false;
+            }
+
+            // Pause
+            if (e.keyCode === 80) {
+                pause();
+            }
+
+            // Restart
+            if (e.keyCode === 82) {
+                restartLevel();
+            }
+
+            // Skip Level (N)
+            if (e.keyCode === 78) {
+                if (currentLevel < levels.length - 1) {
+                    currentLevel++;
+                } else {
+                    currentLevel = 0;
+                }
+                clearInterval(gameLoop);
+                resetVariables();
+            }
+
+            // Skip Level (M)
+            if (e.keyCode === 77) {
+                if (currentLevel > 0) {
+                    currentLevel--;
+                } else {
+                    currentLevel =  levels.length - 1;
+                }
+                clearInterval(gameLoop);
+                resetVariables();
+            }
+
+            // Select Level (Enter)
+            if (e.keyCode === 13) {
+                let levelSelect = prompt(`Enter level (1 - ${levels.length})`);
+                if (levelSelect && levelSelect - 1 < levels.length) {
+                    currentLevel = levelSelect - 1;
+                    clearInterval(gameLoop);
+                    resetVariables();
+                } else {
+                    alert('Invalid level');
+                }
+            }
+        });
+
+        function calcFPS() {
+            window.requestAnimationFrame(function() {
+                const now = performance.now();
+                while(times.length > 0 && times[0] <= now - 1000) {
+                    times.shift();
+                }
+                times.push(now);
+                fps = times.length;
+            });
+        }
+
+        function place_meeting(obj, x, y) {
+            let meeting;
+            for (let i = 0; i < objects.length; i++) {
+                if (objects[i].x === x && objects[i].y === y && objects[i].tag === obj) {
+                    meeting = true;
+                    i = objects.length;
+                } else {
+                    meeting = false;
+                }
+            }
+            return meeting;
+        }
+
+        const undoAdd = (crate) => {
+            if (pushing === false) {
+                undoArray.push({
+                    'player': {
+                        'x': player.x,
+                        'y': player.y
+                    }
+                });
+            }
+
+            if (pushing) {
+                pushing = false;
+            }
+        }
+
+        //crateCheck = (x, y, x2, y2) => {
+        const crateCheck = (dir, x, y) => {
+            let blocked = false;
+            // Set an x2 and y2 and double the grid size. This is so we can see what's on the other side of the crate that we're pushing
+            let x2 = x;
+            let y2 = y;
+            switch(dir) {
+                case 'right':
+                    x2 += gridSize;
+                    break;
+                case 'left':
+                    x2 -= gridSize;
+                    break;
+                case 'up':
+                    y2 -= gridSize;
+                    break;
+                case 'down':
+                    y2 += gridSize;
+                    break;
+            }
+            let crate = objects.filter((obj) => {
+                if (obj.tag === 'crate' && obj.x === x && obj.y === y) {
+                    if (!place_meeting('block', x2, y2) && !place_meeting('crate', x2, y2) && x2 < canvas.width && x2 + gridSize > 0 && y2 < canvas.height && y2 + gridSize > 0) {
+                        undoArray.push({
+                            'player': {
+                                'x': player.x,
+                                'y': player.y
+                            },
+                            'crate': {
+                                'id': obj,
+                                'x': obj.x,
+                                'y': obj.y
+                            }
+                        });
+                        obj.x = x2;
+                        obj.y = y2;
+                        pushes++;
+                        pushing = true;
+                        setTimeout(checkForWin,20);
+                    } else {
+                        blocked = true;
+                    }
+                }
+            });
+            return blocked;
+        }
+
+        const pause = () => {
+            if (paused === true) {
+                gameLoop = setInterval(draw, 15);
+                paused = false;
+            } else {
+                let pauseText = 'PAUSED';
+                ctx.fillStyle = '#f00';
+                ctx.font = "bold 16px Verdana";
+                ctx.fillText(pauseText, (canvas.width / 2) - pauseText.length * 7, canvas.height / 2 + 7);
+                clearInterval(gameLoop);
+                paused = true;
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: url(../imgs/background.png);
+    font-family: verdana;
+    color: #fff;
+    font-weight: bold;
+    font-size: 1.2em;
+    touch-action: manipulation;
+}
+
+#container {
+    text-align: center;
+}
+
+#game-info {
+    max-width: 608px;
+    margin: 20px auto;
+}
+
+#moves {
+    width: 50%;
+    float: left;
+    text-align: left;
+}
+
+#fps {
+    width: 50%;
+    float: right;
+    text-align: right;
+}
+
+#controls {
+    display: none;
+    margin-top: 30px;
+    text-align: center;
+}
+
+#controls button {
+    width: 75px;
+    height: 75px;
+}
+
+.clear-fix {
+    clear: both;
+}
+
+canvas {
+    margin: 0;
+}
+
+@media only screen and (max-width: 600px) {
+    #container {
+        z-index: 1;
+        overflow: hidden;
+    }
+    #controls {
+        z-index: 10;
+        margin-top: 0px;
+        display: block;
+    }
+}
